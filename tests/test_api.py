@@ -5,25 +5,24 @@ Run with HTML report: pytest -v --html=report.html --self-contained-html
 """
 
 import pytest
-import app as app_module
-from app import app as flask_app
+from app import create_app
+from models import db, Task
 
 
 @pytest.fixture
 def client():
-    """Provides a fresh Flask test client with reset in-memory data for each test."""
-    flask_app.config["TESTING"] = True
+    """Creates a fresh Flask app bound to an isolated in-memory SQLite
+    database for each test, so tests don't depend on execution order
+    or leak state into one another."""
+    test_app = create_app(db_uri="sqlite:///:memory:")
+    test_app.config["TESTING"] = True
 
-    # Reset the in-memory "database" before every test so tests don't
-    # depend on execution order or leak state into one another.
-    app_module.tasks = {
-        1: {"id": 1, "title": "Learn pytest", "completed": False},
-        2: {"id": 2, "title": "Write API tests", "completed": False},
-    }
-    app_module.next_id = 3
-
-    with flask_app.test_client() as client:
+    with test_app.test_client() as client:
         yield client
+
+    with test_app.app_context():
+        db.session.remove()
+        db.drop_all()
 
 
 # ---------- Health check ----------
@@ -105,17 +104,19 @@ def test_update_nonexistent_task_returns_404(client):
     assert response.status_code == 404
 
 
+def test_update_task_empty_title_returns_400(client):
+    response = client.put("/tasks/1", json={"title": "   "})
+    assert response.status_code == 400
+    assert "error" in response.get_json()
+
+
 # ---------- DELETE /tasks/<id> ----------
 
 def test_delete_task_success(client):
-    # Create a task first so we don't depend on test ordering.
     created = client.post("/tasks", json={"title": "Temp task"}).get_json()
     task_id = created["id"]
-
     response = client.delete(f"/tasks/{task_id}")
     assert response.status_code == 200
-
-    # Confirm it's actually gone.
     follow_up = client.get(f"/tasks/{task_id}")
     assert follow_up.status_code == 404
 
