@@ -5,15 +5,21 @@ test suite in this repo. Run with: python app.py
 """
 
 from flask import Flask, jsonify, request
+from models import db, Task
 
 app = Flask(__name__)
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///tasks.db"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+db.init_app(app)
 
-# In-memory "database" — resets every time the app restarts.
-tasks = {
-    1: {"id": 1, "title": "Learn pytest", "completed": False},
-    2: {"id": 2, "title": "Write API tests", "completed": False},
-}
-next_id = 3
+with app.app_context():
+    db.create_all()
+    # Seed the same two starter tasks the in-memory version had,
+    # but only if the table is empty (so restarts don't duplicate them).
+    if Task.query.count() == 0:
+        db.session.add(Task(title="Learn pytest", completed=False))
+        db.session.add(Task(title="Write API tests", completed=False))
+        db.session.commit()
 
 
 @app.get("/health")
@@ -25,55 +31,58 @@ def health():
 @app.get("/tasks")
 def get_tasks():
     """Return all tasks."""
-    return jsonify(list(tasks.values())), 200
+    tasks = Task.query.all()
+    return jsonify([t.to_dict() for t in tasks]), 200
 
 
 @app.get("/tasks/<int:task_id>")
 def get_task(task_id):
     """Return a single task by id, or 404 if it doesn't exist."""
-    task = tasks.get(task_id)
+    task = db.session.get(Task, task_id)
     if task is None:
         return jsonify({"error": "Task not found"}), 404
-    return jsonify(task), 200
+    return jsonify(task.to_dict()), 200
 
 
 @app.post("/tasks")
 def create_task():
     """Create a new task. Requires a JSON body with a 'title' field."""
-    global next_id
     data = request.get_json(silent=True)
 
     if not data or "title" not in data or not str(data["title"]).strip():
         return jsonify({"error": "'title' is required"}), 400
 
-    task = {"id": next_id, "title": data["title"], "completed": False}
-    tasks[next_id] = task
-    next_id += 1
-    return jsonify(task), 201
+    task = Task(title=data["title"], completed=False)
+    db.session.add(task)
+    db.session.commit()
+    return jsonify(task.to_dict()), 201
 
 
 @app.put("/tasks/<int:task_id>")
 def update_task(task_id):
     """Update an existing task's title and/or completed status."""
-    task = tasks.get(task_id)
+    task = db.session.get(Task, task_id)
     if task is None:
         return jsonify({"error": "Task not found"}), 404
 
     data = request.get_json(silent=True) or {}
     if "title" in data:
-        task["title"] = data["title"]
+        task.title = data["title"]
     if "completed" in data:
-        task["completed"] = bool(data["completed"])
+        task.completed = bool(data["completed"])
 
-    return jsonify(task), 200
+    db.session.commit()
+    return jsonify(task.to_dict()), 200
 
 
 @app.delete("/tasks/<int:task_id>")
 def delete_task(task_id):
     """Delete a task by id."""
-    if task_id not in tasks:
+    task = db.session.get(Task, task_id)
+    if task is None:
         return jsonify({"error": "Task not found"}), 404
-    del tasks[task_id]
+    db.session.delete(task)
+    db.session.commit()
     return jsonify({"message": "Task deleted"}), 200
 
 

@@ -5,3 +5,4 @@ __pycache__/
 report.html
 .vscode/
 .idea/
+tasks.db
